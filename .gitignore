@@ -1,0 +1,10 @@
+.idea
+
+
+*__pycache__
+*_not_used/
+*archive/
+model_predictor/checkpoints/general_ckpts/
+model_predictor/checkpoints/direct_ckpts/
+
+*generated_trajectories_fullinput/
