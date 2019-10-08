@@ -31,7 +31,7 @@ import sys
 import json
 
 from config import n_actions, RQN_num_feats, action_length, qlearning_gamma
-device = "cuda:0"
+# device = "cuda:0"
 # n_actions = 6 # 1 no action + 4 directions acc + 1 click
 # qlearning_gamma = 0.9
 # # n_actions = 4*2 # 4 directions * 2 if click
@@ -50,47 +50,75 @@ device = "cuda:0"
 class _RQN(nn.Module):
     def __init__(self, in_dim=RQN_num_feats, out_dim=n_actions):
         super(_RQN, self).__init__()
-        self.rnn = nn.Sequential(
-            nn.LSTM(in_dim, 30, batch_first=True),
-            nn.ReLU(inplace=True),
-            nn.Linear(30, out_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(out_dim, out_dim),
-        )
+        self.hidden_dim = 30
+        self.batch_size = 1
+        self.num_layers = 1
+        # self.hidden = self.init_hidden()
+        # self.rnn = nn.Sequential(
+        self.lstm0 = nn.LSTM(in_dim, self.hidden_dim, self.num_layers, batch_first=True)
+        self.relu0 = nn.ReLU()
+        self.dense1 = nn.Linear(self.hidden_dim, out_dim)
+        self.relu1 = nn.ReLU()
+        self.dense2 = nn.Linear(out_dim, out_dim)
+        # )
     def forward(self, x):
-        x = self.rnn(x)
+        # x = torch.from_numpy(x)
+        # print('x size as input')
+        # print(x.size())
+        # x,self.hidden = self.lstm0(x, self.hidden)
+        x,_ = self.lstm0(x.float())
+        x = self.relu0(x[:,-1])
+        x = self.dense1(x)
+        x = self.relu1(x)
+        x = self.dense2(x)
+        # x = self.rnn(x.float())
+        # print('x size as output')
+        # print(x.size())
         return x
 
+    def init_hidden(self):
+        # This is what we'll initialise our hidden state as
+        return (torch.zeros(self.num_layers, self.batch_size, self.hidden_dim),
+                torch.zeros(self.num_layers, self.batch_size, self.hidden_dim))
+
 class RQN_agent():
-    def __init__(self, gamma, input_frames=action_length, in_dim=RQN_num_feats, out_dim=n_actions):
-        self.rqn = _RQN(in_dim, out_dim)
-        self.gamma = gamma
-        self.optimizer = optim.Adam(self.rqn.parameters(), lr=5e-4)
+    def __init__(self, gamma, input_frames=action_length, in_dim=RQN_num_feats, out_dim=n_actions, lr=5e-4, device=torch.device("cpu")):
+        self.device = device
+        self.cpu = torch.device("cpu")
+        self.rqn = _RQN(in_dim, out_dim).to(self.device)
+        self.rqn = self.rqn.float()
+        self.gamma = torch.tensor(gamma).to(self.device)
+        self.optimizer = optim.Adam(self.rqn.parameters(), lr=lr)
         self.criterion = nn.MSELoss()
         self.epsilon = 1
 
-    # return q value for a given state & action pair
+    # return q value for a given state & action pair, all in device
     def get_q_value(self, state_t, action):
-        q_values = self.rqn.forward(state_t)
-        one_hot = torch.zeros(1, n_actions)
-        one_hot.scatter(2, action, 1)
-        q_pred_a = torch.sum(q_values * one_hot)
-        return q_pred_a
+        q_values = self.rqn.forward(torch.from_numpy(state_t).to(self.device))
+        # one_hot = torch.zeros(1, n_actions)
+        # one_hot.scatter(1, torch.tensor([[action]]), 1).to(self.device)
+        # q_pred_a = torch.sum(q_values * one_hot)
+        # return q_pred_a
+        return q_values[0,action]
 
-    def get_target(self, state_next, reward, is_done):
-        q_values_next = self.rqn.forward(state_next)
-        q_target_a = reward + self.gamma * np.amax(q_values_next) # tf.reduce_max(q_values_next, axis=1)
+    # Get target, only called within target agent, all in device
+    def get_target(self, state_next, reward):
+        q_values_next = self.rqn.forward(torch.from_numpy(state_next).to(self.device))
+        q_target_a = torch.tensor(reward).to(self.device) + self.gamma * torch.max(q_values_next) # tf.reduce_max(q_values_next, axis=1)
         return q_target_a
 
     # train network and return loss
     # target: calculated from target network
+    # All in device, only return in cpu
     def train_network(self, state_t, action, target):
         prediction = self.get_q_value(state_t, action)
         loss = self.criterion(prediction, target)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        return loss
+        loss.to(self.cpu)
+
+        return loss.item()
 
     # sample action for a given state
     def get_action(self, state_t):
@@ -98,9 +126,9 @@ class RQN_agent():
         if thre < self.epsilon:
             action = np.random.choice(n_actions, 1)[0]
         else:
-            q_values = self.rqn.forward(state_t)
-            action = np.argmax(q_values)
-        return action
+            q_values = self.rqn.forward(torch.from_numpy(state_t).to(self.device))
+            action = torch.argmax(q_values).to(self.cpu).item()
+        return int(action)
     
     def set_epsilon(self, epsilon_):
         self.epsilon = epsilon_
@@ -120,11 +148,18 @@ def train_iteration(learning_agent, target_agent, env, t_max, train=False):
         a = learning_agent.get_action(s)
         # print('action')
         # print(a)
-        trajectory, reward, is_done = env.act(a)
-        s_next = trajectory # 10 frames * 22 num_feats
-        s_next=s_next.reshape((1,action_length,RQN_num_feats))
+        s_next, reward, is_done, control_path_ = env.act(a)
+        # s_next = trajectory # 5 frames * 22 num_feats
+        s_next = s_next.reshape((1,action_length,RQN_num_feats))
+        if s_next.dtype == 'object':
+            print('s_next contains object:')
+            print(s_next)
+            print('The control path:')
+            print(control_path_)
+            print('time is at ' + str(t))
+
         if train:
-            target = target_agent.get_target(s_next, reward, is_done)
+            target = target_agent.get_target(s_next, reward)
             loss = learning_agent.train_network(s, a, target)
             td_loss.append(loss)
         session_reward.append(reward)
@@ -166,7 +201,7 @@ def train_loop(learning_agent, target_agent, env, episode, train, timeout, conti
     print('End of training, average actions to catch: {}'.format(np.mean(time_taken)))
 
     if not train:
-        with open('./model_predictor/data/active_training_data.json', 'w') as data_file:
+        with open('./episode_records/trajectory_history.json', 'w') as data_file:
             json.dump(trajectory_history, data_file, indent=4)
         return trajectory_history
 
@@ -187,17 +222,14 @@ if __name__ == "__main__":
     parser.add_argument('--save_model', type=bool, action='store', 
                         help='save trained model or not', default=False)
 
-    parser.add_argument('--active_learning', type=bool, action='store', 
-                        help='load pretrained RQN & model predictor to do active learning', default=False)
-    
     parser.add_argument('--train', type=bool, action='store',
                         help='if to train a model', default=False)
     
-    parser.add_argument('--epsilon', type=float, action='store',
-                        help='epsilon for Q learning', default=0.99)
+    # parser.add_argument('--epsilon', type=float, action='store',
+    #                     help='epsilon for Q learning', default=0.99)
 
     parser.add_argument('--lr', type=float, action='store',
-                        help='learning rate for Adam optimiser', default=1e-4)
+                        help='learning rate for Adam optimiser', default=5e-4)
 
     parser.add_argument('--timeout', type=int, action='store',
                         help='max number of frames for one episode, 1/60s per frame', default=1800)
@@ -220,13 +252,23 @@ if __name__ == "__main__":
 
     environment = Interaction_env()
 
+    is_cuda = torch.cuda.is_available()
+    # If we have a GPU available, we'll set our device to GPU. We'll use this device variable later in our code.
+    if is_cuda:
+        device = torch.device("cuda")
+        print("GPU is available")
+    else:
+        device = torch.device("cpu")
+        print("GPU not available, CPU used")
+    # device = torch.device("cpu")
+
     # initialize learning_agent and target_agent
 
-        # train for catching pucks
+    # train for catching pucks
     if args.train:
     
-        learning_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions)
-        target_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions)
+        learning_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
+        target_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
         
         # environment.predictor.saver.restore(sess, "./model_predictor/checkpoints/pretrained_model_predictor_2.ckpt")
         if args.continue_from > 0:
@@ -237,7 +279,7 @@ if __name__ == "__main__":
         if args.continue_from == 0:
             sys.exit('[ERROR] test model not specified')
         
-        learning_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions)
+        learning_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
         learning_agent.set_epsilon(0)
         target_agent = None
         checkpoint = torch.load('./exported/rqn_{}_epoch'.format(args.continue_from))

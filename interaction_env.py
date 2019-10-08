@@ -159,7 +159,7 @@ class Interaction_env:
         # Update self.state
         self.state['last_trajectory'] = trajectory
         
-        return trajectory, reward, is_done
+        return trajectory, reward, is_done, control_path_
 
     # Calculate reward given trajectory [action_length:22] of one action length
     def reward_cal(self, trajectory):
