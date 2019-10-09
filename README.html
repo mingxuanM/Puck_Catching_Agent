@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+    <html>
+    <head>
+        <meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+        <title>Puck_Catching_Agent</title>
+        
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+        
+        <style>
+.task-list-item { list-style-type: none; } .task-list-item-checkbox { margin-left: -20px; vertical-align: middle; }
+</style>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        
+        
+    </head>
+    <body>
+        <h1 id="puckcatchingagent">Puck_Catching_Agent</h1>
+<p>This repository contains several policy gradient implementations (as well as RQN) of Puck_Catching_Agent designed in <a href="https://github.com/mingxuanM/physics_learning_rl">physics_learning_rl</a>. For different algorithms' experiment, evaluation and optimization.</p>
+<p>Adopt the same simulator as used in <a href="https://github.com/mingxuanM/physics_learning_rl">physics_learning_rl</a>.</p>
+<h2 id="implemented">Implemented</h2>
+<ol>
+<li>
+<p>RQN (Recurrent Q-Network) with LSTM</p>
+<p>This is the pytorch version of the RQN Puck_Catching_Agent (the pretrined-model in transfer learning framework) used in <a href="https://github.com/mingxuanM/physics_learning_rl">physics_learning_rl</a>.</p>
+</li>
+<li>
+<p>Actor-Critics</p>
+<p>Update A-C networks during each step, both with LSTM. Critics predicts action value.</p>
+</li>
+</ol>
+<h2 id="algorithms-plan-to-have">Algorithms plan to have</h2>
+<ol>
+<li>
+<p>Advantage Actor-Critics (A2C)</p>
+<p>Update A-C networks after a whole episode, both with LSTM. Critics predicts state value.</p>
+</li>
+</ol>
+<h2 id="further-task">Further task</h2>
+<p>Multi-agent framework:</p>
+<ol>
+<li>Let agents learn to catch a same puck.</li>
+<li>team-work to control other pucks to push a target puck to goal.</li>
+</ol>
+<h2 id="package-dependency">Package dependency</h2>
+<ul>
+<li>python 3.7+</li>
+<li>pytorch 1.2.0+</li>
+<li>pyduktape 0.0.6</li>
+</ul>
+
+    </body>
+    </html>

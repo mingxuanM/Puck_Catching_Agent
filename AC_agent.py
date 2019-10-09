@@ -173,6 +173,7 @@ def train_iteration(learning_agent, target_agent, env, t_max, train=False):
         s_next, reward, is_done = env.act(a)
         # s_next = trajectory # 5 frames * 22 num_feats
         s_next = s_next.reshape((1,action_length,RQN_num_feats))
+        reward = np.array([reward])
 
         if train:
             a_next = learning_agent.train_network(s, a, reward, s_next):
