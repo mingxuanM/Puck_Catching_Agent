@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-RQN_agent.py
+AC_agent.py
 RL training process
-RQN_agent: RL agent class, contains all networks and training function.
+AC_agent: RL agent class, contains all networks and training function.
     get_q_value()
-    get_target()
     train_network()
     get_action()
     set_epsilon()
@@ -15,7 +14,6 @@ Interaction_env: the environment class that the agent interacts with.
     act()
     reward_cal()
     action_generation()
-
 """
 import argparse
 from interaction_env import Interaction_env
@@ -53,95 +51,108 @@ class _RQN(nn.Module):
         self.hidden_dim = 30
         self.batch_size = 1
         self.num_layers = 1
-        # self.hidden = self.init_hidden()
-        # self.rnn = nn.Sequential(
+
         self.lstm0 = nn.LSTM(in_dim, self.hidden_dim, self.num_layers, batch_first=True)
         self.relu0 = nn.ReLU()
         self.dense1 = nn.Linear(self.hidden_dim, out_dim)
         self.relu1 = nn.ReLU()
         self.dense2 = nn.Linear(out_dim, out_dim)
-        # )
+
     def forward(self, x):
-        # x = torch.from_numpy(x)
-        # print('x size as input')
-        # print(x.size())
-        # x,self.hidden = self.lstm0(x, self.hidden)
         x,_ = self.lstm0(x.float())
         x = self.relu0(x[:,-1])
         x = self.dense1(x)
         x = self.relu1(x)
         x = self.dense2(x)
-        # x = self.rnn(x.float())
-        # print('x size as output')
-        # print(x.size())
         return x
 
-    # def init_hidden(self):
-    #     # This is what we'll initialise our hidden state as
-    #     return (torch.zeros(self.num_layers, self.batch_size, self.hidden_dim),
-    #             torch.zeros(self.num_layers, self.batch_size, self.hidden_dim))
+class _Policy(nn.Module):
+    def __init__(self, in_dim=RQN_num_feats, out_dim=n_actions):
+        super(_Policy, self).__init__()
+        self.hidden_dim = 30
+        self.batch_size = 1
+        self.num_layers = 1
 
-class RQN_agent():
+        self.lstm0 = nn.LSTM(in_dim, self.hidden_dim, self.num_layers, batch_first=True)
+        self.relu0 = nn.ReLU()
+        self.dense1 = nn.Linear(self.hidden_dim, out_dim)
+        self.relu1 = nn.ReLU()
+        self.dense2 = nn.Linear(out_dim, out_dim)
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x,_ = self.lstm0(x.float())
+        x = self.relu0(x[:,-1])
+        x = self.dense1(x)
+        x = self.relu1(x)
+        x = self.dense2(x)
+        x = self.softmax(x)
+        return x
+
+class AC_agent():
     def __init__(self, gamma, input_frames=action_length, in_dim=RQN_num_feats, out_dim=n_actions, lr=5e-4, device=torch.device("cpu")):
         self.device = device
         self.cpu = torch.device("cpu")
-        self.rqn = _RQN(in_dim, out_dim).to(self.device)
-        self.rqn = self.rqn.float()
-        self.gamma = torch.tensor(gamma).to(self.device)
-        self.optimizer = optim.Adam(self.rqn.parameters(), lr=lr)
-        self.criterion = nn.MSELoss()
-        self.epsilon = 1
+
+        self.critic = _RQN(in_dim, out_dim).to(self.device)
+        self.critic = self.critic.float()
+        self.optimizer_critic = optim.Adam(self.critic.parameters(), lr=lr)
+        self.criterion_critic = nn.MSELoss()
+
+        self.actor = _Policy(in_dim, out_dim).to(self.device)
+        self.actor = self.actor.float()
+        self.optimizer_actor = optim.Adam(self.actor.parameters(), lr=lr)
+        self.criterion_actor = self._max_loss()
+
+
+        self.gamma = torch.tensor(gamma).float().to(self.device)
+        # self.epsilon = 1
+    
+    def _max_loss(self, policy, action, q_value):
+        # action = torch.argmax(policy)
+        return -torch.log(policy[:,action]) * q_value
 
     # return q value for a given state & action pair, all in device
     def get_q_value(self, state_t, action):
-        q_values = self.rqn.forward(torch.from_numpy(state_t).to(self.device))
-        # one_hot = torch.zeros(1, n_actions)
-        # one_hot.scatter(1, torch.tensor([[action]]), 1).to(self.device)
-        # q_pred_a = torch.sum(q_values * one_hot)
-        # return q_pred_a
+        # q_values = self.critic.forward(torch.from_numpy(state_t).to(self.device))
+        q_values = self.critic.forward(state_t)
         return q_values[:,action]
 
+    # train network
+    # update actor with -log(A(state_t))*Q(state_t, action) first
+    # then update critic with r + gamma*Q(state_next, action_next)
+    # All in device
+    def train_network(self, state_t, action, reward, state_next):
+        state_t = torch.from_numpy(state_t).to(self.device)
+        policy = self.actor.forward(state_t)
+        q_value = self.get_q_value(state_t, action)
+        loss_actor = self.criterion_actor(policy, q_value)
+        self.optimizer_actor.zero_grad()
+        loss_actor.backward()
+        self.optimizer_actor.step()
 
-    # Get target, only called within target agent, all in device
-    def get_target(self, state_next, reward):
-        q_values_next = self.rqn.forward(torch.from_numpy(state_next).to(self.device))
-        q_target_a = torch.tensor(reward).float().to(self.device) + self.gamma * torch.max(q_values_next) # tf.reduce_max(q_values_next, axis=1)
-        # print('Size of target:')
-        # print(q_target_a)
-        # return torch.cuda.FloatTensor(q_target_a.float())
-        return q_target_a
+        state_next = torch.from_numpy(state_next).to(self.device)
+        action_next = self.get_action(self, state_next)
+        target = torch.tensor(reward).float().to(self.device) + self.gamma * self.get_q_value(state_next, action_next)
+        loss_critic = self.criterion_critic(q_value, target)
+        self.optimizer_critic.zero_grad()
+        loss_critic.backward()
+        self.optimizer_critic.step()
 
-    # train network and return loss
-    # target: calculated from target network
-    # All in device, only return in cpu
-    def train_network(self, state_t, action, target):
-        prediction = self.get_q_value(state_t, action)
-        # print('Prediction: ')
-        # print(prediction)
-        # print(prediction.dtype)
-        # print('Target:')
-        # print(target)
-        # print(target.dtype)
-        loss = self.criterion(prediction, target)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        loss.to(self.cpu)
-
-        return loss.item()
+        return action_next
 
     # sample action for a given state
     def get_action(self, state_t):
-        thre = np.random.rand()
-        if thre < self.epsilon:
-            action = np.random.choice(n_actions, 1)[0]
-        else:
-            q_values = self.rqn.forward(torch.from_numpy(state_t).to(self.device))
-            action = torch.argmax(q_values).to(self.cpu).item()
+        # thre = np.random.rand()
+        # if thre < self.epsilon:
+        #     action = np.random.choice(n_actions, 1)[0]
+        # else:
+        policy = self.actor.forward(torch.from_numpy(state_t).to(self.device))
+        action = torch.argmax(policy).to(self.cpu).item()
         return int(action)
     
-    def set_epsilon(self, epsilon_):
-        self.epsilon = epsilon_
+    # def set_epsilon(self, epsilon_):
+    #     self.epsilon = epsilon_
 
 # run one episode
 # t_max: maximum running time
@@ -154,21 +165,23 @@ def train_iteration(learning_agent, target_agent, env, t_max, train=False):
     s = s.reshape((1,action_length,RQN_num_feats))
     t = 0
     is_done = False
+    a = learning_agent.get_action(s)
     while t < t_max and not is_done:
-        a = learning_agent.get_action(s)
+        # a = learning_agent.get_action(s)
         # print('action')
         # print(a)
         s_next, reward, is_done = env.act(a)
         # s_next = trajectory # 5 frames * 22 num_feats
         s_next = s_next.reshape((1,action_length,RQN_num_feats))
-        reward = np.array([reward])
 
         if train:
-            target = target_agent.get_target(s_next, reward)
-            loss = learning_agent.train_network(s, a, target)
-            td_loss.append(loss)
+            a_next = learning_agent.train_network(s, a, reward, s_next):
+        else:
+            a_next = learning_agent.get_action(s_next)
+            
         session_reward.append(reward)
         s = s_next
+        a = a_next
         t += action_length
     trajectory = env.destory()
     
@@ -181,13 +194,12 @@ def train_loop(learning_agent, target_agent, env, episode, train, timeout, conti
     trajectory_history = []
     for i in range(episode):
         # print('[session {} started] '.format(i) + time.strftime("%H:%M:%S", time.localtime()))
-        session_reward, td_loss, is_done, trajectory = train_iteration(learning_agent, target_agent, env, timeout, train)
+        session_reward, is_done, trajectory = train_iteration(learning_agent, target_agent, env, timeout, train)
         if not train:
             trajectory_history.append(trajectory)
         session_reward_mean = np.mean(session_reward)
-        td_loss_mean = np.mean(td_loss) 
-        print('[session {} finished] '.format(i+1) + time.strftime("%H:%M:%S", time.localtime()) + ';\t actions taken = {:.4f};\t mean reward = {:.4f};\t total reward = {:.4f};\t epsilon = {:.4f};\t mean loss = {:.4f}'.format(
-            len(session_reward), session_reward_mean, np.sum(session_reward), learning_agent.epsilon, td_loss_mean))
+        print('[session {} finished] '.format(i+1) + time.strftime("%H:%M:%S", time.localtime()) + ';\t actions taken = {:.4f};\t mean reward = {:.4f};\t total reward = {:.4f};\t epsilon = {:.4f}'.format(
+            len(session_reward), session_reward_mean, np.sum(session_reward), learning_agent.epsilon))
         
         if train:
             if i%2==0:
@@ -247,13 +259,6 @@ if __name__ == "__main__":
 
     # RQN_num_feats = 22
     # input_frames = 5
-    epsilon_decay = 0.9
-    if args.episode >= 10000:
-        epsilon_decay = 0.9995 # 10000 epochs
-    elif args.episode >= 1000:
-        epsilon_decay = 0.999 # 2000 epochs
-    else:
-        epsilon_decay = 0.95
 
     environment = Interaction_env()
 
@@ -267,28 +272,24 @@ if __name__ == "__main__":
         print("GPU not available, CPU used")
     # device = torch.device("cpu")
 
-    # initialize learning_agent and target_agent
-
+    # initialize learning_agent
     # train for catching pucks
     if args.train:
     
-        learning_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
-        target_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
-        
+        learning_agent = AC_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
         # environment.predictor.saver.restore(sess, "./model_predictor/checkpoints/pretrained_model_predictor_2.ckpt")
         if args.continue_from > 0:
-            checkpoint = torch.load('./exported/rqn_{}_epoch'.format(args.continue_from))
-            learning_agent.rqn.load_state_dict(checkpoint)
-            target_agent.rqn.load_state_dict(checkpoint)
+            checkpoint = torch.load('./exported/ac_{}_epoch'.format(args.continue_from))
+            learning_agent.actor.load_state_dict(checkpoint)
+            learning_agent.critic.load_state_dict(checkpoint)
     else:
         if args.continue_from == 0:
             sys.exit('[ERROR] test model not specified')
         
-        learning_agent = RQN_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
-        learning_agent.set_epsilon(0)
-        target_agent = None
-        checkpoint = torch.load('./exported/rqn_{}_epoch'.format(args.continue_from))
-        learning_agent.rqn.load_state_dict(checkpoint)
+        learning_agent = AC_agent(qlearning_gamma, action_length, RQN_num_feats, n_actions, args.lr, device)
+        checkpoint = torch.load('./exported/ac_{}_epoch'.format(args.continue_from))
+        learning_agent.actor.load_state_dict(checkpoint)
+        learning_agent.critic.load_state_dict(checkpoint)
 
     # train
-    _ = train_loop(learning_agent, target_agent, environment, args.episode, args.train, args.timeout, args.continue_from, args.save_model)
+    _ = train_loop(learning_agent, environment, args.episode, args.train, args.timeout, args.continue_from, args.save_model)
